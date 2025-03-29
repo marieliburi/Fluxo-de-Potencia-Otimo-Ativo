@@ -23,6 +23,29 @@ def buscar_dados_linhas():
         dados = pd.read_sql(query, conn)
     return dados
 
+# Executar os cálculos
+dadosbarra = buscar_dadosbarra()
+dadoslinha = buscar_dados_linhas()
+
+# Construir a função objetiva em uma única equação
+equacao_objetiva = []
+
+for _, row in dadoslinha.iterrows():
+    origem, destino, tap = row["Barra_Origem"], row["Barra_Destino"], row["tap"]
+    gkm = row["g"]
+    
+    equacao_objetiva.append(
+        f"{gkm:.6f} * (1 / {tap}**2) * (V{origem}**2 + V{destino}**2) - 2 * (1 / {tap}) * V{origem} * V{destino} * cos(Theta{origem} - Theta{destino})"
+    )
+
+# Para juntar todas as equações
+funcao_objetiva = " + ".join(equacao_objetiva)
+
+# Exibir o resultado final
+print("\nFunção Objetiva:\n")
+print(funcao_objetiva)
+print()
+
 # Função para calcular a potência ativa Pkm
 
 # Se k é nó inicial:
@@ -31,83 +54,73 @@ def buscar_dados_linhas():
 # Se k é nó final:
 # Pkm = gkm * V²k - (1 / tkm) * Vk * Vm * (gkm * cos(θkm) + bkm * sin(θkm))
 
-def calcular_potencia_ativa(k, m, gkm, tap, Vk, Vm, theta_km, bkm):
-    if k == 1:  # nó inicial
-        Pkm = (gkm * (1 / tap**2)) * Vk**2 - (1 / tap) * Vk * Vm * (gkm * np.cos(theta_km) + bkm * np.sin(theta_km))
-    else:  # nó final
-        Pkm = gkm * Vk**2 - (1 / tap) * Vk * Vm * (gkm * np.cos(theta_km) + bkm * np.sin(theta_km))
-    return Pkm
-
-# Função para calcular a potência ativa para ambas as barras (inicial e final)
-def calcular_potencia_ativa_total(row, V, theta):
-    origem, destino, g, b, bsh, tap = row["Barra_Origem"], row["Barra_Destino"], row["g"], row["b"], row["bsh"], row["tap"]
-    Vk = V[origem]
-    Vm = V[destino]
-
-    # Calcular as diferenças de ângulo
-    theta_km_inicial = theta[origem] - theta[destino]  # Diferença de ângulo para o nó inicial
-    theta_km_final = theta[destino] - theta[origem]  # Diferença de ângulo para o nó final
-    
-    # Calcular a potência ativa para o nó inicial (k = origem)
-    Pkm_inicial = calcular_potencia_ativa(origem, destino, g, tap, Vk, Vm, theta_km_inicial, b)
-
-    # Calcular a potência ativa para o nó final (k = destino)
-    Pkm_final = calcular_potencia_ativa(destino, origem, g, tap, Vk, Vm, theta_km_final, b)
-
-    return Pkm_inicial, Pkm_final
-
-# Executar os cálculos
-dadosbarra = buscar_dadosbarra()
-dadoslinha = buscar_dados_linhas()
 
 # Inicializar a tensão e os ângulos
 V = {barra: 1.0 for barra in dadosbarra.index}  # Tensão das barras
 theta = {barra: 0.0 for barra in dadosbarra.index}  # Ângulo das barras
 
 # Calcular a potência ativa para cada linha (tanto para o nó inicial quanto final) usando a nova função
+# Gerar expressões da potência ativa para cada linha (tanto para o nó inicial quanto final)
+
+print("INICIAL: Pkm = (gkm (1 / t²km)) * Vk² - (1 / tkm) * Vk * Vm * (gkm * cos(θkm) + bkm * sin(θkm))")
+print("\nFINAL: Pkm = gkm * V²k - (1 / tkm) * Vk * Vm * (gkm * cos(θkm) + bkm * sin(θkm))")
+print()
 for _, row in dadoslinha.iterrows():
-    Pkm_inicial, Pkm_final = calcular_potencia_ativa_total(row, V, theta)
-    
-    # Exibir o resultado da potência ativa para o nó inicial e o nó final
     origem, destino = row["Barra_Origem"], row["Barra_Destino"]
-    print(f"Potência ativa entre {origem} e {destino} (Nó Inicial): {Pkm_inicial:.6f}")
-    print(f"Potência ativa entre {origem} e {destino} (Nó Final): {Pkm_final:.6f}")
-    print()  # Pule uma linha entre os resultados
+    gkm, bkm, tap = row["g"], row["b"], row["tap"]
+    
+    # Expressões das potências ativas
+    expressao_pkm_inicial = (
+        f"({gkm:.6f} * (1 / {tap}**2)) * V{origem}² - "
+        f"(1 / {tap}) * V{origem} * V{destino} * "
+        f"({gkm:.6f} * cos(Theta{origem} - Theta{destino}) + {bkm:.6f} * sin(Theta{origem} - Theta{destino}))"
+    )
+    
+    expressao_pkm_final = (
+        f"({gkm:.6f} * V{destino}²) - "
+        f"(1 / {tap}) * V{origem} * V{destino} * "
+        f"({gkm:.6f} * cos(Theta{destino} - Theta{origem}) + {bkm:.6f} * sin(Theta{destino} - Theta{origem}))"
+    )
+
+    # Exibir as expressões simbólicas das potências ativas
+    print(f"Expressão da potência ativa entre {origem} e {destino} (Nó Inicial): {expressao_pkm_inicial}")
+    print(f"Expressão da potência ativa entre {origem} e {destino} (Nó Final): {expressao_pkm_final}")
+    print()  
+
 
 # Continuação para a primeira restrição
 # Pkm − PGk + PC = 0,∀k ∈ G′ ∪ C
-print("Restrição 1: Pkm − PGk + PC = 0,∀k ∈ G′ ∪ C")
+print("\nRESTRIÇÃO 1: Pkm − PGk + PC = 0,∀k ∈ G′ ∪ C")
 
 # Definição da barra slack e dos conjuntos de barras
 barra_slack = dadosbarra[dadosbarra["tipo"] == 2].index[0]  
-barras_geracao = set(dadosbarra[dadosbarra["tipo"] == 0].index)
-barras_carga = set(dadosbarra[dadosbarra["tipo"] == 1].index)  
+barras_geracao = set(dadosbarra[dadosbarra["tipo"] == 1].index)
+barras_carga = set(dadosbarra[dadosbarra["tipo"] == 0].index)  
 
 barras_restricao1 = (barras_geracao | barras_carga) - {barra_slack}  # Barras que entram na restrição
 
 # Criar dicionário para armazenar os valores de Pkm somados por barra
 #Como se fosse um vetor, so que adiciona 0 para todos os elementos para nao ser vazio
 fluxo_potencia = {k: 0 for k in barras_restricao1}
+# Construir a restrição de forma simbólica
+restricoes = []
 
-# Somar os fluxos de potência ativa Pkm para cada barra k
-#iterrows() percorre as linhas do DataFrame.
-for _, row in dadoslinha.iterrows():
-    Pkm_inicial, Pkm_final = calcular_potencia_ativa_total(row, V, theta)
-
-    # Acumular no fluxo de potência das barras envolvidas (se elas estiverem na restrição)
-    origem, destino = row["Barra_Origem"], row["Barra_Destino"]
-    if origem in fluxo_potencia:
-        fluxo_potencia[origem] += Pkm_inicial
-    if destino in fluxo_potencia:
-        fluxo_potencia[destino] += Pkm_final
-
-
-# Aplicar a equação da restrição para cada barra
 for k in barras_restricao1:
-    P_geracao = dadosbarra.at[k, "Pg"]  # Potência ativa gerada
-    P_carga = dadosbarra.at[k, "Pc"]  # Potência ativa consumida
+    termos_fluxo = []
+    
+    for _, row in dadoslinha.iterrows():
+        origem, destino, tap = row["Barra_Origem"], row["Barra_Destino"], row["tap"]
+        
+        if origem == k or destino == k:
+            gkm = row["g"]
+            termos_fluxo.append(
+                f"{gkm:.6f} * (1 / {tap}**2) * (V{k}**2) - (1 / {tap}) * V{k} * V{destino} * (gkm * cos(Theta{k} - Theta{destino}))"
+            )
 
-    # Resíduo da equação de restrição
+    restricao_k = " + ".join(termos_fluxo) + f" - P_G{k} + P_C{k} = 0"
+    restricoes.append(restricao_k)
 
-    restricao = fluxo_potencia[k] - P_geracao + P_carga
-    print(f"Restrição 1 para barra {k}: {restricao:.6f}")
+# Exibir todas as restrições
+for k, restricao in zip(barras_restricao1, restricoes):
+    print(f"Restrição 1 para barra {k}: {restricao}")
+    print()
