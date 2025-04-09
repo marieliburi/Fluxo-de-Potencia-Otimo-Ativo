@@ -35,7 +35,7 @@ dadoslinha = buscar_dados_linhas()
 # Construir a Função Objetiva
 # -------------------------------
 print("\nFUNÇÃO OBJETIVA:\n")
-print("\n Fórmula: gkm * (1 / t²km) * Vk² + Vm² - 2 * (1 / tkm) * Vk * Vm * cos(θkm)")
+print("\nFórmula: gkm * (1 / t²km) * Vk² + Vm² - 2 * (1 / tkm) * Vk * Vm * cos(θkm)")
 
 equacao_objetiva = []
 
@@ -57,39 +57,57 @@ print(funcao_objetiva)
 print()
 
 # -------------------------------
+# Função para calcular PKM
+# -------------------------------
+
+def calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial"):
+    origem_int = int(origem)
+    destino_int = int(destino)
+
+    if tap > 1:
+        tap_inv_str = f"(1 / {tap:.4f})"
+        tap_inv_quad_str = f"(1 / ({tap:.4f}**2))"
+    else:
+        tap_inv_str = ""
+        tap_inv_quad_str = ""
+
+    if tipo == "inicial":
+        return (
+            f"({gkm:.6f} * {tap_inv_quad_str}) * (V{origem_int}**2) - "
+            f"{tap_inv_str} * V{origem_int} * V{destino_int} * "
+            f"({gkm:.6f} * cos(θ{origem_int} {destino_int}) + {bkm:.6f} * sin(θ{origem_int} {destino_int}))"
+        ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "").replace("(1 / ()**2)", "")
+
+    elif tipo == "final":
+        return (
+            f"{gkm:.6f} * (V{destino_int}**2) - "
+            f"{tap_inv_str} * V{destino_int} * V{origem_int} * "
+            f"({gkm:.6f} * cos(θ{destino_int} {origem_int}) + {bkm:.6f} * sin(θ{destino_int} {origem_int}))"
+        ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
+
+
+# -------------------------------
 # Expressão da Potência Ativa
 # -------------------------------
 print("EXPRESSÕES DA POTÊNCIA ATIVA (Pkm):\n")
 print("INICIAL: Pkm = (gkm * (1 / t²km)) * Vk² - (1 / tkm) * Vk * Vm * (gkm * cos(θkm) + bkm * sin(θkm))")
 print("FINAL:   Pkm = gkm * Vk² - (1 / tkm) * Vk * Vm * (gkm * cos(θkm) + bkm * sin(θkm))\n")
 
-
-
 for _, row in dadoslinha.iterrows():
     origem = row["Barra_Origem"]
     destino = row["Barra_Destino"]
     gkm = row["g"]
     bkm = row["b"]
-    tap = f"t{origem}{destino}"  # Notação simbólica
+    tap = row["tap"]
 
-    origem_int = int(origem)
-    destino_int = int(destino)
-
-    expressao_pkm_inicial = (
-        f"({gkm:.6f} * (1 / (t{origem_int} {destino_int}**2))) * (V{origem_int}**2) - "
-        f"(1 / t{origem_int} {destino_int}) * V{origem_int} * V{destino_int} * "
-        f"({gkm:.6f} * cos(θ{origem_int} {destino_int}) + {bkm:.6f} * sin(θ{origem_int} {destino_int}))"
-    )
-    expressao_pkm_final = (
-        f"{gkm:.6f} * (V{destino_int}**2) - "
-        f"(1 / t{origem_int} {destino_int}) * V{destino_int} * V{origem_int} * "
-        f"({gkm:.6f} * cos(θ{destino_int} {origem_int}) + {bkm:.6f} * sin(θ{destino_int} {origem_int}))"
-    )
+    expressao_pkm_inicial = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
+    expressao_pkm_final = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
 
     print(f"Linha {origem} → {destino}:")
     print(f"  Nó Inicial: {expressao_pkm_inicial}")
     print(f"  Nó Final:   {expressao_pkm_final}")
     print()
+
 
 # -------------------------------
 # Restrição 1: Balanço de Potência Ativa
@@ -97,41 +115,47 @@ for _, row in dadoslinha.iterrows():
 print("-----------------------------------------------")
 print("RESTRIÇÃO 1: Pkm − PGk + PC = 0, ∀k ∈ G′ ∪ C\n")
 
-
-barra_slack = dadosbarra[dadosbarra["tipo"] == 2].index[0]
+# Define a barra slack e os conjuntos de barras para geração e carga
+barra_slack = int(dadosbarra[dadosbarra["tipo"] == 2].index[0])
 barras_geracao = set(dadosbarra[dadosbarra["tipo"] == 1].index)
 barras_carga = set(dadosbarra[dadosbarra["tipo"] == 0].index)
 
+# Conjunto das barras que participam da restrição (todas menos a slack)
 barras_restricao1 = (barras_geracao | barras_carga) - {barra_slack}
 restricoes = []
 
-for k in barras_restricao1:
+# Percorre todas as barras relevantes, convertendo para inteiro para garantir igualdade
+for k in sorted(barras_restricao1):
+    k_int = int(k)
     termos_fluxo = []
 
+    # Pegando valores reais de Pg e Pc
+    Pg = dadosbarra.loc[k_int, "Pg"]
+    Pc = dadosbarra.loc[k_int, "Pc"]
+
+    # Percorre cada linha (conexão) e verifica se a barra k está conectada
     for _, row in dadoslinha.iterrows():
-        origem = row["Barra_Origem"]
-        destino = row["Barra_Destino"]
+        # Converte barras de origem e destino para inteiros
+        origem = int(row["Barra_Origem"])
+        destino = int(row["Barra_Destino"])
         gkm = row["g"]
-        tap = f"t{origem}{destino}"
+        bkm = row["b"]
+        tap = row["tap"]
 
-        origem_int = int(origem)
-        destino_int = int(destino)
+        # Se a barra k é a barra de origem, usa a expressão do nó inicial
+        if k_int == origem:
+            termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
+            termos_fluxo.append(f"({termo})")
+        # Se k for a barra de destino, utiliza a expressão do nó final
+        elif k_int == destino:
+            termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
+            termos_fluxo.append(f"({termo})")
 
-        if origem == k:
-            termos_fluxo.append(
-                f"{gkm:.6f} * (1 / (t{origem_int}{destino_int}**2)) * (V{k}**2) - "
-                f"(1 / t {origem_int} {destino_int}) * V{k} * V{destino} * (gkm * cos(θ{k}{destino}))"
-        )
-        elif destino == k:
-            termos_fluxo.append(
-                f"{gkm:.6f} * (V{k}**2) - "
-                f"(1 / t {origem_int} {destino_int}) * V{k} * V{origem} * (gkm * cos(θ{k}{origem}))"
-            )
+    # Constrói a equação simbólica da restrição usando PG e PC literais (não os valores numéricos)
+    restricao_k = " + ".join(termos_fluxo) + f" - ({Pg}) + ({Pc}) = 0"
+    restricoes.append((k_int, restricao_k))
 
-    restricao_k = " + ".join(termos_fluxo) + f" - P_G{k} + P_C{k} = 0"
-    restricoes.append((k, restricao_k))
-
-# Exibir as restrições
+# Exibe as restrições, pulando uma linha entre elas
 for k, expressao in restricoes:
     print(f"Restrição para barra {k}:")
     print(expressao)
