@@ -73,16 +73,16 @@ def calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial"):
 
     if tipo == "inicial":
         return (
-            f"({gkm:.6f} * {tap_inv_quad_str}) * (V{origem_int}**2) - "
-            f"{tap_inv_str} * V{origem_int} * V{destino_int} * "
-            f"({gkm:.6f} * cos(θ{origem_int} {destino_int}) + {bkm:.6f} * sin(θ{origem_int} {destino_int}))"
-        ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "").replace("(1 / ()**2)", "")
+            f"({tap_inv_quad_str}{gkm:.6f}) * (V{origem_int}**2) - "
+            f"{tap_inv_str}V{origem_int} * V{destino_int} * "
+            f"({gkm:.6f} * cos(θ{origem_int} - θ{destino_int}) + ({bkm:.6f}) * sin(θ{origem_int} - θ{destino_int}))"
+        )
 
     elif tipo == "final":
         return (
             f"{gkm:.6f} * (V{destino_int}**2) - "
-            f"{tap_inv_str} * V{destino_int} * V{origem_int} * "
-            f"({gkm:.6f} * cos(θ{destino_int} {origem_int}) + {bkm:.6f} * sin(θ{destino_int} {origem_int}))"
+            f"{tap_inv_str}V{destino_int} * V{origem_int} * "
+            f"({gkm:.6f} * cos(θ{destino_int} - θ{origem_int}) + ({bkm:.6f}) * sin(θ{destino_int} - θ{origem_int}))"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
 
 
@@ -142,6 +142,10 @@ for k in sorted(barras_restricao1):
         bkm = row["b"]
         tap = row["tap"]
 
+        # ⚠️ Pula o ramo se ele se conecta com a barra slack
+        if origem == barra_slack or destino == barra_slack:
+            continue
+
         # Se a barra k é a barra de origem, usa a expressão do nó inicial
         if k_int == origem:
             termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
@@ -152,7 +156,7 @@ for k in sorted(barras_restricao1):
             termos_fluxo.append(f"({termo})")
 
     # Constrói a equação simbólica da restrição usando PG e PC literais (não os valores numéricos)
-    restricao_k = " + ".join(termos_fluxo) + f" - ({Pg}) + ({Pc}) = 0"
+    restricao_k = " +\n ".join(termos_fluxo) + f" - ({Pg}) + ({Pc}) = 0"
     restricoes.append((k_int, restricao_k))
 
 # Exibe as restrições, pulando uma linha entre elas
