@@ -18,7 +18,7 @@ def buscar_dadosbarra():
 # Buscar os dados das linhas
 def buscar_dados_linhas():
     engine = conectar_banco()
-    query = "SELECT Barra_Origem, Barra_Destino, g, b, bsh, tap FROM dadoslinha"
+    query = "SELECT Barra_Origem AS Origem, Barra_Destino AS Destino, g AS gkm, b AS bkm, bsh, tap FROM dadoslinha"
     with engine.connect() as conn:
         dados = pd.read_sql(query, conn)
     return dados
@@ -26,8 +26,6 @@ def buscar_dados_linhas():
 # ===============================
 # INÍCIO DO CÁLCULO
 # ===============================
-
-# Dados
 dadosbarra = buscar_dadosbarra()
 dadoslinha = buscar_dados_linhas()
 
@@ -38,17 +36,14 @@ print("\nFUNÇÃO OBJETIVA:\n")
 print("\nFórmula: gkm * (1 / t²km) * Vk² + Vm² - 2 * (1 / tkm) * Vk * Vm * cos(θkm)")
 
 equacao_objetiva = []
-
 for _, row in dadoslinha.iterrows():
-    origem = row["Barra_Origem"]
-    destino = row["Barra_Destino"]
-    origem_int = int(origem)
-    destino_int = int(destino)
-    gkm = row["g"]
+    origem = row["Origem"]
+    destino = row["Destino"]
+    gkm = row["gkm"]
 
     termo = (
-       f"{gkm:.6f} * (1 / (t{origem_int} {destino_int}**2)) * (V{origem}**2 + V{destino}**2) "
-       f"- 2 * (1 / t{origem_int} {destino_int}) * V{origem} * V{destino} * cos(θ{origem}{destino})"
+        f"{gkm:.6f} * (1 / (t{origem}{destino}**2)) * (V{origem}**2 + V{destino}**2) "
+        f"- 2 * (1 / t{origem}{destino}) * V{origem} * V{destino} * cos(θ{origem}{destino})"
     )
     equacao_objetiva.append(termo)
 
@@ -57,34 +52,40 @@ print(funcao_objetiva)
 print()
 
 # -------------------------------
-# Função para calcular PKM
+# Função para formatar o TAP
 # -------------------------------
-
-def calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial"):
-    origem_int = int(origem)
-    destino_int = int(destino)
-
+def formatar_tap(tap):
     if tap > 1:
         tap_inv_str = f"(1 / {tap:.4f})"
         tap_inv_quad_str = f"(1 / ({tap:.4f}**2))"
     else:
         tap_inv_str = ""
         tap_inv_quad_str = ""
+    return tap_inv_str, tap_inv_quad_str
 
+# -------------------------------
+# Função para puxar parametros do banco de dados
+# -------------------------------
+def extrair_parametros_linha(row):
+    return row['Origem'], row['Destino'], row['gkm'], row['bkm'], row['tap'], row['bsh']
+
+# -------------------------------
+# Função para calcular PKM
+# -------------------------------
+def calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial"):
+    tap_inv_str, tap_inv_quad_str = formatar_tap(tap)
     if tipo == "inicial":
         return (
-            f"({tap_inv_quad_str}{gkm:.6f}) * (V{origem_int}**2) - "
-            f"{tap_inv_str}V{origem_int} * V{destino_int} * "
-            f"({gkm:.6f} * cos(θ{origem_int} - θ{destino_int}) + ({bkm:.6f}) * sin(θ{origem_int} - θ{destino_int}))"
+            f"({tap_inv_quad_str}{gkm:.6f}) * (V{origem}**2) - "
+            f"{tap_inv_str}V{origem} * V{destino} * "
+            f"({gkm:.6f} * cos(θ{origem} - θ{destino}) + ({bkm:.6f}) * sin(θ{origem} - θ{destino}))"
         )
-
     elif tipo == "final":
         return (
-            f"{gkm:.6f} * (V{destino_int}**2) - "
-            f"{tap_inv_str}V{destino_int} * V{origem_int} * "
-            f"({gkm:.6f} * cos(θ{destino_int} - θ{origem_int}) + ({bkm:.6f}) * sin(θ{destino_int} - θ{origem_int}))"
+            f"{gkm:.6f} * (V{destino}**2) - "
+            f"{tap_inv_str}V{destino} * V{origem} * "
+            f"({gkm:.6f} * cos(θ{destino} - θ{origem}) + ({bkm:.6f}) * sin(θ{destino} - θ{origem}))"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
-
 
 # -------------------------------
 # Expressão da Potência Ativa
@@ -94,20 +95,14 @@ print("INICIAL: Pkm = (gkm * (1 / t²km)) * Vk² - (1 / tkm) * Vk * Vm * (gkm * 
 print("FINAL:   Pkm = gkm * Vk² - (1 / tkm) * Vk * Vm * (gkm * cos(θkm) + bkm * sin(θkm))\n")
 
 for _, row in dadoslinha.iterrows():
-    origem = row["Barra_Origem"]
-    destino = row["Barra_Destino"]
-    gkm = row["g"]
-    bkm = row["b"]
-    tap = row["tap"]
+    origem, destino, gkm, bkm, tap, bsh = extrair_parametros_linha(row)
+    pkm_inicial = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
+    pkm_final = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
 
-    expressao_pkm_inicial = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
-    expressao_pkm_final = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
-
-    print(f"Linha {origem} → {destino}:")
-    print(f"  Nó Inicial: {expressao_pkm_inicial}")
-    print(f"  Nó Final:   {expressao_pkm_final}")
-    print()
-
+    #print(f"Linha {origem} → {destino}:")
+    #print(f"  Nó Inicial: {pkm_inicial}")
+    #print(f"  Nó Final:   {pkm_final}")
+    #print()
 
 # -------------------------------
 # Restrição 1: Balanço de Potência Ativa
@@ -115,52 +110,84 @@ for _, row in dadoslinha.iterrows():
 print("-----------------------------------------------")
 print("RESTRIÇÃO 1: Pkm − PGk + PC = 0, ∀k ∈ G′ ∪ C\n")
 
-# Define a barra slack e os conjuntos de barras para geração e carga
 barra_slack = int(dadosbarra[dadosbarra["tipo"] == 2].index[0])
 barras_geracao = set(dadosbarra[dadosbarra["tipo"] == 1].index)
 barras_carga = set(dadosbarra[dadosbarra["tipo"] == 0].index)
-
-# Conjunto das barras que participam da restrição (todas menos a slack)
 barras_restricao1 = (barras_geracao | barras_carga) - {barra_slack}
+
 restricoes = []
-
-# Percorre todas as barras relevantes, convertendo para inteiro para garantir igualdade
 for k in sorted(barras_restricao1):
-    k_int = int(k)
     termos_fluxo = []
+    Pg = dadosbarra.loc[k, "Pg"]
+    Pc = dadosbarra.loc[k, "Pc"]
 
-    # Pegando valores reais de Pg e Pc
-    Pg = dadosbarra.loc[k_int, "Pg"]
-    Pc = dadosbarra.loc[k_int, "Pc"]
-
-    # Percorre cada linha (conexão) e verifica se a barra k está conectada
     for _, row in dadoslinha.iterrows():
-        # Converte barras de origem e destino para inteiros
-        origem = int(row["Barra_Origem"])
-        destino = int(row["Barra_Destino"])
-        gkm = row["g"]
-        bkm = row["b"]
-        tap = row["tap"]
-
-        # ⚠️ Pula o ramo se ele se conecta com a barra slack
+        origem, destino, gkm, bkm, tap, bsh = extrair_parametros_linha(row)
         if origem == barra_slack or destino == barra_slack:
             continue
-
-        # Se a barra k é a barra de origem, usa a expressão do nó inicial
-        if k_int == origem:
+        if k == origem:
             termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
             termos_fluxo.append(f"({termo})")
-        # Se k for a barra de destino, utiliza a expressão do nó final
-        elif k_int == destino:
+        elif k == destino:
             termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
             termos_fluxo.append(f"({termo})")
 
-    # Constrói a equação simbólica da restrição usando PG e PC literais (não os valores numéricos)
     restricao_k = " +\n ".join(termos_fluxo) + f" - ({Pg}) + ({Pc}) = 0"
-    restricoes.append((k_int, restricao_k))
+    restricoes.append((k, restricao_k))
 
-# Exibe as restrições, pulando uma linha entre elas
 for k, expressao in restricoes:
     print(f"Restrição para barra {k}:")
+    print(expressao)
+    print()
+
+# -------------------------------
+# Função para calcular QKM
+# -------------------------------
+def calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial"):
+    tap_inv_str, tap_inv_quad_str = formatar_tap(tap)
+    if tipo == "inicial":
+        return (
+            f"-({tap_inv_quad_str}{bkm:.6f}) * (V{origem}**2) - "
+            f"{tap_inv_str}V{origem} * V{destino} * "
+            f"({gkm:.6f} * sin(θ{origem} - θ{destino}) - ({bkm:.6f}) * cos(θ{origem} - θ{destino})) + "
+            f"{bsh / 2:.6f} * (V{origem}**2)"
+        )
+    elif tipo == "final":
+        return (
+            f"-{bkm:.6f} * (V{destino}**2) - "
+            f"{tap_inv_str}V{destino} * V{origem} * "
+            f"({gkm:.6f} * sin(θ{destino} - θ{origem}) - ({bkm:.6f}) * cos(θ{destino} - θ{origem})) + "
+            f"{bsh / 2:.6f} * (V{destino}**2)"
+        ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
+
+# ----------------------------------------
+# Restrição 2: Balanço de Potência Reativa
+# ----------------------------------------
+print("-----------------------------------------------")
+print("RESTRIÇÃO 2: Qkm − QGk + QCk − Qshk = 0, ∀k ∈ C\n")
+
+restricoes_q = []
+for k in sorted(barras_carga):
+    termos_fluxo_q = []
+    Qg = dadosbarra.loc[k, "Qg"]
+    Qc = dadosbarra.loc[k, "Qc"]
+    Qsh = dadosbarra.loc[k, "bsh"]
+
+    for _, row in dadoslinha.iterrows():
+        origem, destino, gkm, bkm, tap, bsh = extrair_parametros_linha(row)
+        if origem == barra_slack or destino == barra_slack:
+            continue
+        if k == origem:
+            termo = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial")
+            termos_fluxo_q.append(f"({termo})")
+        elif k == destino:
+            termo = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="final")
+            termos_fluxo_q.append(f"({termo})")
+
+    restricao_qk = " +\n ".join(termos_fluxo_q) + f" - ({Qg}) + ({Qc}) - ({Qsh}) = 0"
+    restricoes_q.append((k, restricao_qk))
+
+for k, expressao in restricoes_q:
+    print(f"Restrição de Reativa para barra {k}:")
     print(expressao)
     print()
