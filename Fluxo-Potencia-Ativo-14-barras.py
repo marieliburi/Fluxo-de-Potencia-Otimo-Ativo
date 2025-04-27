@@ -42,50 +42,82 @@ for _, row in dadoslinha.iterrows():
     gkm = row["gkm"]
 
     termo = (
-        f"{gkm:.6f} * (1 / (t{origem}{destino}**2)) * (V{origem}**2 + V{destino}**2) "
-        f"- 2 * (1 / t{origem}{destino}) * V{origem} * V{destino} * cos(θ{origem}{destino})"
+        f"{gkm:.6f} * (1 / (t{int(origem)}{int(destino)}**2)) * (V{int(origem)}**2 + V{int(destino)}**2) "
+        f"- 2 * (1 / t{int(origem)}{int(destino)}) * V{int(origem)} * V{int(destino)} * cos(θ{int(origem)}{int(destino)})"
     )
+
     equacao_objetiva.append(termo)
 
 funcao_objetiva = " +\n".join(equacao_objetiva)
 print(funcao_objetiva)
 print()
 
+# Inicializar o dicionário global para os valores de tap maiores que 1
+tap_vars = {}
+tap_counter = 1  # Para numerar as variáveis tap1, tap2, etc.
+
+# -------------------------------
+# Função para registrar taps > 1
+# -------------------------------
+def registrar_taps(dadoslinha):
+    global tap_counter, tap_vars
+    for _, row in dadoslinha.iterrows():
+        tap = row['tap']
+        if tap > 1:
+            # Verifica se o valor já foi registrado
+            if tap not in tap_vars.values():
+                tap_vars[f"tap{tap_counter}"] = tap  # Atribui um nome ao tap
+                tap_counter += 1
+
+# Registrar os taps uma única vez
+registrar_taps(dadoslinha)
+
 # -------------------------------
 # Função para formatar o TAP
 # -------------------------------
-def formatar_tap(tap):
-    if tap > 1:
-        tap_inv_str = f"(1 / {tap:.4f})"
-        tap_inv_quad_str = f"(1 / ({tap:.4f}**2))"
-    else:
-        tap_inv_str = ""
-        tap_inv_quad_str = ""
-    return tap_inv_str, tap_inv_quad_str
+def obter_nome_tap(tap):
+    # Retorna o nome da variável tap, ou vazio se tap <= 1
+    for nome, valor in tap_vars.items():
+        if tap == valor:
+            return nome
+    return ""  # Caso o tap não seja maior que 1
+
+
+
 
 # -------------------------------
-# Função para puxar parametros do banco de dados
+# Função para puxar parâmetros do banco de dados
 # -------------------------------
 def extrair_parametros_linha(row):
     return row['Origem'], row['Destino'], row['gkm'], row['bkm'], row['tap'], row['bsh']
+
 
 # -------------------------------
 # Função para calcular PKM
 # -------------------------------
 def calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial"):
-    tap_inv_str, tap_inv_quad_str = formatar_tap(tap)
+    tap_nome = obter_nome_tap(tap)  # Nome da variável do tap
+    if tap_nome:
+        tap_inv_quad_str = f"(1 / ({tap_nome}**2))"
+        tap_inv_str = f"(1 / {tap_nome})"
+    else:
+        tap_inv_quad_str = ""
+        tap_inv_str = ""
+
     if tipo == "inicial":
         return (
-            f"({tap_inv_quad_str}{gkm:.6f}) * (V{origem}**2) - "
-            f"{tap_inv_str}V{origem} * V{destino} * "
-            f"({gkm:.6f} * cos(θ{origem} - θ{destino}) + ({bkm:.6f}) * sin(θ{origem} - θ{destino}))"
+            f"({tap_inv_quad_str}{gkm:.6f}) * (V{int(origem)}**2) - "
+            f"{tap_inv_str}V{int(origem)} * V{int(destino)} * "
+            f"({gkm:.6f} * cos(theta{int(origem)} - theta{int(destino)}) + ({bkm:.6f}) * sin(theta{int(origem)} - theta{int(destino)}))"
         )
     elif tipo == "final":
         return (
-            f"{gkm:.6f} * (V{destino}**2) - "
-            f"{tap_inv_str}V{destino} * V{origem} * "
-            f"({gkm:.6f} * cos(θ{destino} - θ{origem}) + ({bkm:.6f}) * sin(θ{destino} - θ{origem}))"
+            f"{gkm:.6f} * (V{int(destino)}**2) - "
+            f"{tap_inv_str}V{int(destino)} * V{int(origem)} * "
+            f"({gkm:.6f} * cos(theta{int(destino)} - theta{int(origem)}) + ({bkm:.6f}) * sin(theta{int(destino)} - theta{int(origem)}))"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
+
+
 
 # -------------------------------
 # Expressão da Potência Ativa
@@ -126,10 +158,10 @@ for k in sorted(barras_restricao1):
         if origem == barra_slack or destino == barra_slack:
             continue
         if k == origem:
-            termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
+            termo = calcular_fluxo_p_ativo(int(origem), int(destino), gkm, bkm, tap, tipo="inicial")
             termos_fluxo.append(f"({termo})")
         elif k == destino:
-            termo = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
+            termo = calcular_fluxo_p_ativo(int(origem), int(destino), gkm, bkm, tap, tipo="final")
             termos_fluxo.append(f"({termo})")
 
     restricao_k = " +\n ".join(termos_fluxo) + f" - ({Pg}) + ({Pc}) = 0"
@@ -144,21 +176,28 @@ for k, expressao in restricoes:
 # Função para calcular QKM
 # -------------------------------
 def calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial"):
-    tap_inv_str, tap_inv_quad_str = formatar_tap(tap)
+    tap_nome = obter_nome_tap(tap)  # Nome da variável do tap
+    if tap_nome:
+        tap_inv_quad_str = f"(1 / ({tap_nome}**2))"
+        tap_inv_str = f"(1 / {tap_nome})"
+    else:
+        tap_inv_quad_str = ""
+        tap_inv_str = ""
+
     if tipo == "inicial":
         return (
-            f"-({tap_inv_quad_str}{bkm:.6f}) * (V{origem}**2) - "
-            f"{tap_inv_str}V{origem} * V{destino} * "
-            f"({gkm:.6f} * sin(θ{origem} - θ{destino}) - ({bkm:.6f}) * cos(θ{origem} - θ{destino})) + "
-            f"{bsh / 2:.6f} * (V{origem}**2)"
+            f"-(({bkm:.6f} * {tap_inv_quad_str}) + {bsh:.6f}) * (V{int(origem)}**2) + "
+            f"{tap_inv_str}V{int(origem)} * V{int(destino)} * "
+            f"({bkm:.6f} * cos(theta{int(origem)} - theta{int(destino)}) - {gkm:.6f} * sin(theta{int(origem)} - theta{int(destino)}))"
         )
+    
     elif tipo == "final":
         return (
-            f"-{bkm:.6f} * (V{destino}**2) - "
-            f"{tap_inv_str}V{destino} * V{origem} * "
-            f"({gkm:.6f} * sin(θ{destino} - θ{origem}) - ({bkm:.6f}) * cos(θ{destino} - θ{origem})) + "
-            f"{bsh / 2:.6f} * (V{destino}**2)"
+            f"-({bkm:.6f} + {bsh:.6f}) * (V{int(destino)}**2) + "
+            f"{tap_inv_str}V{int(destino)} * V{int(origem)} * "
+            f"({bkm:.6f} * cos(theta{int(destino)} - theta{int(origem)}) - {gkm:.6f} * sin(theta{int(destino)} - theta{int(origem)}))"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
+
 
 # ----------------------------------------
 # Restrição 2: Balanço de Potência Reativa
@@ -178,16 +217,37 @@ for k in sorted(barras_carga):
         if origem == barra_slack or destino == barra_slack:
             continue
         if k == origem:
-            termo = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial")
+            termo = calcular_fluxo_q_reativo(int(origem), int(destino), gkm, bkm, bsh, tap, tipo="inicial")
             termos_fluxo_q.append(f"({termo})")
         elif k == destino:
-            termo = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="final")
+            termo = calcular_fluxo_q_reativo(int(origem), int(destino), gkm, bkm, bsh, tap, tipo="final")
             termos_fluxo_q.append(f"({termo})")
 
-    restricao_qk = " +\n ".join(termos_fluxo_q) + f" - ({Qg}) + ({Qc}) - ({Qsh}) = 0"
+    restricao_qk = " +\n ".join(termos_fluxo_q) + f" ({Qg}) + ({Qc}) - ({Qsh}) = 0"
     restricoes_q.append((k, restricao_qk))
 
 for k, expressao in restricoes_q:
     print(f"Restrição de Reativa para barra {k}:")
     print(expressao)
     print()
+
+
+# -------------------------------
+# Impressão dos Fluxos Reativos Qkm
+# -------------------------------
+print("-----------------------------------------------")
+print("FLUXOS DE POTÊNCIA REATIVA (Qkm):\n")
+print("INICIAL: Qkm = -(bkm * (1/tap²) + b^sh_km) * Vk² + (1/tap) * Vk * Vm * (bkm * cos(θk - θm) - gkm * sin(θk - θm))")
+print("FINAL:   Qkm = -(bkm + bsh) * Vm² + (1/tap) * Vm * Vk * (bkm * cos(θm - θk) - gkm * sin(θm - θk))")
+
+
+for _, row in dadoslinha.iterrows():
+    origem, destino, gkm, bkm, tap, bsh = extrair_parametros_linha(row)
+    qkm_inicial = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial")
+    qkm_final = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="final")
+
+    #print(f"Linha {origem} → {destino}:")
+    #print(f"  Qkm Inicial: {qkm_inicial}")
+    #print(f"  Qkm Final:   {qkm_final}")
+    #print()
+
