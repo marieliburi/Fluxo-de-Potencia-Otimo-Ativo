@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # Criar conexão com o banco
 def conectar_banco():
@@ -23,34 +23,30 @@ def buscar_dados_linhas():
         dados = pd.read_sql(query, conn)
     return dados
 
-# ===============================
+#Função para conectar na tabela dadosv
+def buscar_dadosv():
+    engine = conectar_banco()
+    query = "SELECT Vmin, Vmax FROM dadosv"
+    with engine.connect() as conn:
+        dados = pd.read_sql(query, conn)
+    return dados
+
+#Função para conectar na tabela dadosv
+def buscar_dadost():
+    engine = conectar_banco()
+    query = "SELECT Tmin, Tmax FROM dadost"
+    with engine.connect() as conn:
+        dados = pd.read_sql(query, conn)
+    return dados
+
+# -----------------
 # INÍCIO DO CÁLCULO
-# ===============================
+# -----------------
 dadosbarra = buscar_dadosbarra()
 dadoslinha = buscar_dados_linhas()
+dadosv = buscar_dadosv()
+dadost = buscar_dadost()
 
-# -------------------------------
-# Construir a Função Objetiva
-# -------------------------------
-print("\nFUNÇÃO OBJETIVA:\n")
-print("\nFórmula: gkm * (1 / t²km) * Vk² + Vm² - 2 * (1 / tkm) * Vk * Vm * cos(θkm)")
-
-equacao_objetiva = []
-for _, row in dadoslinha.iterrows():
-    origem = row["Origem"]
-    destino = row["Destino"]
-    gkm = row["gkm"]
-
-    termo = (
-        f"{gkm:.6f} * (1 / (t{int(origem)}{int(destino)}**2)) * (V{int(origem)}**2 + V{int(destino)}**2) "
-        f"- 2 * (1 / t{int(origem)}{int(destino)}) * V{int(origem)} * V{int(destino)} * cos(θ{int(origem)}{int(destino)})"
-    )
-
-    equacao_objetiva.append(termo)
-
-funcao_objetiva = " +\n".join(equacao_objetiva)
-print(funcao_objetiva)
-print()
 
 # Inicializar o dicionário global para os valores de tap maiores que 1
 tap_vars = {}
@@ -83,7 +79,34 @@ def obter_nome_tap(tap):
     return ""  # Caso o tap não seja maior que 1
 
 
+# -------------------------------
+# Construir a Função Objetiva
+# -------------------------------
+print("\nFUNÇÃO OBJETIVA:\n")
+print("\nFórmula: gkm * (1 / t²km) * Vk² + Vm² - 2 * (1 / tkm) * Vk * Vm * cos(θkm)")
 
+equacao_objetiva = []
+for _, row in dadoslinha.iterrows():
+    origem = row["Origem"]
+    destino = row["Destino"]
+    gkm = row["gkm"]
+    tap = row["tap"]
+
+    # Verifica se o tap > 1 e obtém o nome correto
+    tap_nome = obter_nome_tap(tap)
+    tap_inv_quad_str = f"(1 / ({tap_nome}**2))" if tap_nome else "1"  # Se não houver tap, usa "1" para manter a multiplicação correta
+    tap_inv_str = f"(1 / {tap_nome})" if tap_nome else "1"
+
+    termo = (
+        f"{gkm:.6f} * {tap_inv_quad_str} * V{int(origem)}**2 + V{int(destino)}**2 "
+        f"- 2 * {tap_inv_str} * V{int(origem)} * V{int(destino)} * cos(theta{int(origem)} - theta{int(destino)})"
+    )
+
+    equacao_objetiva.append(termo.replace("* 1 ", ""))  # Remove multiplicações desnecessárias
+
+funcao_objetiva = " +\n".join(equacao_objetiva)
+print(funcao_objetiva)
+print()
 
 # -------------------------------
 # Função para puxar parâmetros do banco de dados
@@ -139,8 +162,9 @@ for _, row in dadoslinha.iterrows():
 # -------------------------------
 # Restrição 1: Balanço de Potência Ativa
 # -------------------------------
-print("-----------------------------------------------")
-print("RESTRIÇÃO 1: Pkm − PGk + PC = 0, ∀k ∈ G′ ∪ C\n")
+print("--------------------------------------------")
+print("RESTRIÇÃO 1: Pkm − PGk + PC = 0, ∀k ∈ G′ ∪ C")
+print("--------------------------------------------")
 
 barra_slack = int(dadosbarra[dadosbarra["tipo"] == 2].index[0])
 barras_geracao = set(dadosbarra[dadosbarra["tipo"] == 1].index)
@@ -203,7 +227,9 @@ def calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial"
 # Restrição 2: Balanço de Potência Reativa
 # ----------------------------------------
 print("-----------------------------------------------")
-print("RESTRIÇÃO 2: Qkm − QGk + QCk − Qshk = 0, ∀k ∈ C\n")
+print("RESTRIÇÃO 2: Qkm − QGk + QCk − Qshk = 0, ∀k ∈ C")
+print("-----------------------------------------------")
+
 
 restricoes_q = []
 for k in sorted(barras_carga):
@@ -232,22 +258,124 @@ for k, expressao in restricoes_q:
     print()
 
 
-# -------------------------------
-# Impressão dos Fluxos Reativos Qkm
-# -------------------------------
-print("-----------------------------------------------")
-print("FLUXOS DE POTÊNCIA REATIVA (Qkm):\n")
-print("INICIAL: Qkm = -(bkm * (1/tap²) + b^sh_km) * Vk² + (1/tap) * Vk * Vm * (bkm * cos(θk - θm) - gkm * sin(θk - θm))")
-print("FINAL:   Qkm = -(bkm + bsh) * Vm² + (1/tap) * Vm * Vk * (bkm * cos(θm - θk) - gkm * sin(θm - θk))")
+# ---------------------------------------------------------------
+# Restrição 3: Limites de Potência Reativa para Barras de Geração
+# ---------------------------------------------------------------
+print("-------------------------------------------")
+print("RESTRIÇÃO 3: QminGk ≤ QGk ≤ QmaxGk, ∀k ∈ G")
+print("-------------------------------------------")
 
 
-for _, row in dadoslinha.iterrows():
-    origem, destino, gkm, bkm, tap, bsh = extrair_parametros_linha(row)
-    qkm_inicial = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial")
-    qkm_final = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="final")
+restricoes_qg = []
+barras_G = set(dadosbarra[dadosbarra["tipo"].isin([1, 2])].index)  # Filtra barras do tipo 1 e 2
 
-    #print(f"Linha {origem} → {destino}:")
-    #print(f"  Qkm Inicial: {qkm_inicial}")
-    #print(f"  Qkm Final:   {qkm_final}")
-    #print()
+for k in sorted(barras_G):  # Itera sobre as barras do tipo 1 e 2
+    Qmin = dadosbarra.loc[k, "Qmin"]
+    Qmax = dadosbarra.loc[k, "Qmax"]
+    Qg = dadosbarra.loc[k, "Qg"]
 
+    # Monta a restrição
+    restricao_qgk = f"{Qmin} <= QG{k} <= {Qmax}"
+    restricoes_qg.append((k, restricao_qgk))
+
+# Exibe as restrições
+for k, expressao in restricoes_qg:
+    print(f"Restrição para barra {k}:")
+    print(expressao)
+    print()
+
+#------------------------------------------
+#Restrição 4: Vmin_k ≤ Vk ≤ Vmax_k, ∀k ∈ B
+#------------------------------------------
+# Função para inserir valores de Vmin e Vmax no banco
+def inserir_valores_vmin_vmax():
+    engine = conectar_banco()
+    vmin = float(input("Digite o valor de Vmin: "))
+    vmax = float(input("Digite o valor de Vmax: "))
+
+    with engine.connect() as conn:
+        # Apagar os valores antigos
+        delete_query = text("DELETE FROM dadosv")
+        conn.execute(delete_query)
+
+        # Inserir os novos valores
+        insert_query = text("""
+            INSERT INTO dadosv (Vmin, Vmax)
+            VALUES (:vmin, :vmax)
+        """)
+        conn.execute(insert_query, {"vmin": vmin, "vmax": vmax})
+        conn.commit()
+
+    
+    return vmin, vmax  # Retorna os valores para uso na restrição
+
+# Função para montar as restrições usando os dados já buscados
+def montar_restricao_vmin_vmax(dadosbarra, vmin, vmax):
+    if not dadosbarra.empty:
+        print("\n------------------------------------------")
+        print("Restrição 4: Vmin_k ≤ Vk ≤ Vmax_k, ∀k ∈ B:")
+        print("------------------------------------------\n")
+
+        for barra in dadosbarra.index:
+            print(f"Barra {barra}: {vmin} <= V{barra} <= {vmax}")
+    else:
+        print("Erro: Nenhum dado encontrado para dadosbarra.")
+
+# -----------------
+# Fluxo de execução
+# -----------------
+vmin, vmax = inserir_valores_vmin_vmax()  
+montar_restricao_vmin_vmax(dadosbarra, vmin, vmax)  
+
+
+#-----------------------------------------------
+#Restrição 5: Tmin_km ≤ Tkm ≤ Tmax_km, ∀k, m ∈ T
+#-----------------------------------------------
+
+# Função para inserir valores de tmin, tmax no banco
+def inserir_valores_tmin_tmax():
+    engine = conectar_banco()
+    tmin = float(input("\nDigite o valor de tmin para todas as linhas: "))
+    tmax = float(input("Digite o valor de tmax para todas as linhas: "))
+
+    with engine.connect() as conn:
+        # Apagar os valores antigos antes de inserir novos
+        delete_query = text("DELETE FROM dadost")
+        conn.execute(delete_query)
+
+        # Inserir os novos valores
+        insert_query = text("""
+            INSERT INTO dadost (Tmin, Tmax)
+            VALUES (:tmin, :tmax)
+        """)
+        conn.execute(insert_query, {"tmin": tmin, "tmax": tmax})
+        conn.commit()
+
+    return tmin, tmax  # Retorna os valores para uso na restrição
+
+# Função para montar a quinta restrição
+def montar_restricao_tmin_tmax(dadoslinha, tmin, tmax):
+    if not dadoslinha.empty:
+        print("\n------------------------------------------------")
+        print("Restrição 5: Tmin_km ≤ Tkm ≤ Tmax_km, ∀k, m ∈ T:")
+        print("------------------------------------------------\n")
+
+        for _, row in dadoslinha.iterrows():
+            origem = int(row["Origem"])  # Convertendo para inteiro
+            destino = int(row["Destino"])  # Convertendo para inteiro
+            tap = int(row["tap"]) if row["tap"].is_integer() else row["tap"]  # Garantindo que `tap` seja tratado corretamente
+
+            print(f"Linha {origem} → {destino}: {int(tmin) if tmin.is_integer() else tmin} <= t{origem}_{destino} <= {int(tmax) if tmax.is_integer() else tmax}") # o is.integer verifica se o float tem alguma informação depois da virgula, caso tiver ele nao vai cortar
+    else:
+        print("Erro: Nenhum dado encontrado para dadoslinha.")
+
+# -----------------
+# Fluxo de execução
+# -----------------
+tmin, tmax = inserir_valores_tmin_tmax()  # Primeiro, insere os valores no banco
+montar_restricao_tmin_tmax(dadoslinha, tmin, tmax)  # Depois, monta a restrição usando os dados já buscados
+
+print("Valores atribuidos a cada TAP")
+print(f"tap1: {tap_vars.get('tap1', 'tap1 não foi registrado')}")
+print(f"tap2: {tap_vars.get('tap2', 'tap1 não foi registrado')}")
+print(f"tap3: {tap_vars.get('tap3', 'tap1 não foi registrado')}")
