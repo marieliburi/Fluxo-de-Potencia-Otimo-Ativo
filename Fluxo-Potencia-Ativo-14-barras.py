@@ -108,9 +108,9 @@ funcao_objetiva = " +\n".join(equacao_objetiva)
 print(funcao_objetiva)
 print()
 
-# -------------------------------
+# ----------------------------------------------
 # Função para puxar parâmetros do banco de dados
-# -------------------------------
+# ----------------------------------------------
 def extrair_parametros_linha(row):
     return row['Origem'], row['Destino'], row['gkm'], row['bkm'], row['tap'], row['bsh']
 
@@ -223,6 +223,46 @@ def calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
 
 
+
+#-----------
+#Calculo QG
+#-----------
+def calcular_qgk(k, dadosbarra, dadoslinha):
+    
+    #Formula: QGk = QCk − Q_k^sh + ∑{m ∈ k} Qkm
+    # Qk^sh = b_k^sh * Vk²
+    Qc = dadosbarra.loc[k, "Qc"]
+    bsh_k = dadosbarra.loc[k, "bsh"]
+
+    #Cálculo de Q_k^sh
+    Qsh_k = f"{bsh_k:.6f} * V{int(k)}**2"
+
+    # Cálculo da soma Σ{m ∈ k} Q_km
+    termos_fluxo_q = []
+    for _, row in dadoslinha.iterrows():
+        origem = int(row["Origem"])
+        destino = int(row["Destino"])
+        gkm = row["gkm"]
+        bkm = row["bkm"]
+        tap = row["tap"]
+        bsh = row["bsh"]
+
+        # Verifica se o tap > 1 e obtém o nome correto
+        tap_nome = obter_nome_tap(tap)
+        tap_inv_str = f"(1 / {tap_nome})" if tap_nome else ""
+
+        # Cálculo de Q_km(V, tap, θ)
+        if k == origem:
+            Qkm = f"-({bkm:.6f} * {tap_inv_str} + {bsh:.6f}) * V{origem}**2 + {tap_inv_str}V{origem} * V{destino} * ({bkm:.6f} * cos(theta{origem}_{destino}) - {gkm:.6f} * sin(theta{origem}_{destino}))"
+            termos_fluxo_q.append(f"({Qkm})")
+        elif k == destino:
+            Qkm = f"-({bkm:.6f} + {bsh:.6f}) * V{destino}**2 + {tap_inv_str}V{destino} * V{origem} * ({bkm:.6f} * cos(theta{destino}_{origem}) - {gkm:.6f} * sin(theta{destino}_{origem}))"
+            termos_fluxo_q.append(f"({Qkm})")
+
+    # Retorna a equação final de QGk
+    return f"QG{int(k)} = {Qc} - {Qsh_k} + {' + '.join(termos_fluxo_q)}"
+
+
 # ----------------------------------------
 # Restrição 2: Balanço de Potência Reativa
 # ----------------------------------------
@@ -230,11 +270,9 @@ print("-----------------------------------------------")
 print("RESTRIÇÃO 2: Qkm − QGk + QCk − Qshk = 0, ∀k ∈ C")
 print("-----------------------------------------------")
 
-
 restricoes_q = []
-for k in sorted(barras_carga):
+for k in sorted(barras_carga):  # Itera sobre as barras de carga
     termos_fluxo_q = []
-    Qg = dadosbarra.loc[k, "Qg"]
     Qc = dadosbarra.loc[k, "Qc"]
     Qsh = dadosbarra.loc[k, "bsh"]
 
@@ -249,22 +287,25 @@ for k in sorted(barras_carga):
             termo = calcular_fluxo_q_reativo(int(origem), int(destino), gkm, bkm, bsh, tap, tipo="final")
             termos_fluxo_q.append(f"({termo})")
 
-    restricao_qk = " +\n ".join(termos_fluxo_q) + f" ({Qg}) + ({Qc}) - ({Qsh}) = 0"
+    # Substitui QGk pela equação correta de QGk
+    QGk = calcular_qgk(k, dadosbarra, dadoslinha)
+
+    restricao_qk = " +\n ".join(termos_fluxo_q) + f" ({QGk}) + ({Qc}) - ({Qsh}) = 0"
     restricoes_q.append((k, restricao_qk))
 
+# Exibe as restrições corrigidas
 for k, expressao in restricoes_q:
     print(f"Restrição de Reativa para barra {k}:")
     print(expressao)
     print()
 
 
-# ---------------------------------------------------------------
-# Restrição 3: Limites de Potência Reativa para Barras de Geração
-# ---------------------------------------------------------------
 print("-------------------------------------------")
 print("RESTRIÇÃO 3: QminGk ≤ QGk ≤ QmaxGk, ∀k ∈ G")
 print("-------------------------------------------")
 
+print("QGk = QCk − Q_k^sh + ∑{m ∈ k} Qkm")
+print("Qk^sh = b_k^sh * Vk²\n")
 
 restricoes_qg = []
 barras_G = set(dadosbarra[dadosbarra["tipo"].isin([1, 2])].index)  # Filtra barras do tipo 1 e 2
@@ -272,17 +313,44 @@ barras_G = set(dadosbarra[dadosbarra["tipo"].isin([1, 2])].index)  # Filtra barr
 for k in sorted(barras_G):  # Itera sobre as barras do tipo 1 e 2
     Qmin = dadosbarra.loc[k, "Qmin"]
     Qmax = dadosbarra.loc[k, "Qmax"]
-    Qg = dadosbarra.loc[k, "Qg"]
+    Qc = dadosbarra.loc[k, "Qc"]
+    bsh_k = dadosbarra.loc[k, "bsh"]
 
-    # Monta a restrição
-    restricao_qgk = f"{Qmin} <= QG{k} <= {Qmax}"
-    restricoes_qg.append((k, restricao_qgk))
+    # Equação (5.13): Cálculo de Q_k^sh
+    Qsh_k = f"{bsh_k:.6f} * V{int(k)}**2"
 
-# Exibe as restrições
+    # Cálculo da soma Σ_{m ∈ k} Q_km utilizando a função já existente
+    termos_fluxo_q = []
+    for _, row in dadoslinha.iterrows():
+        origem = int(row["Origem"])
+        destino = int(row["Destino"])
+        gkm = row["gkm"]
+        bkm = row["bkm"]
+        tap = row["tap"]
+        bsh = row["bsh"]
+
+        if k == origem:
+            Qkm = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial")
+            termos_fluxo_q.append(f"({Qkm})")
+        elif k == destino:
+            Qkm = calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="final")
+            termos_fluxo_q.append(f"({Qkm})")
+
+    # Monta a equação final de QGk
+    equacao_qg = f"{Qc} - {Qsh_k} + {' + '.join(termos_fluxo_q)}"
+
+    # Monta a restrição no formato desejado
+    restricao_formatada = f"{Qmin} <= {equacao_qg} <= {Qmax}"
+
+    restricoes_qg.append((k, restricao_formatada))
+
+# Exibe as restrições formatadas corretamente
 for k, expressao in restricoes_qg:
     print(f"Restrição para barra {k}:")
     print(expressao)
     print()
+
+    
 
 #------------------------------------------
 #Restrição 4: Vmin_k ≤ Vk ≤ Vmax_k, ∀k ∈ B
@@ -365,7 +433,8 @@ def montar_restricao_tmin_tmax(dadoslinha, tmin, tmax):
             destino = int(row["Destino"])  # Convertendo para inteiro
             tap = int(row["tap"]) if row["tap"].is_integer() else row["tap"]  # Garantindo que `tap` seja tratado corretamente
 
-            print(f"Linha {origem} → {destino}: {int(tmin) if tmin.is_integer() else tmin} <= t{origem}_{destino} <= {int(tmax) if tmax.is_integer() else tmax}") # o is.integer verifica se o float tem alguma informação depois da virgula, caso tiver ele nao vai cortar
+            if tap > 1:
+                print(f"Linha {origem} → {destino}: {int(tmin) if tmin.is_integer() else tmin} <= t{origem}_{destino} <= {int(tmax) if tmax.is_integer() else tmax}") # o is.integer verifica se o float tem alguma informação depois da virgula, caso tiver ele nao vai cortar
     else:
         print("Erro: Nenhum dado encontrado para dadoslinha.")
 
