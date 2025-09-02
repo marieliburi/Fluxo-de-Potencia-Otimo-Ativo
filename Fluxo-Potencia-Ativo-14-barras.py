@@ -1,6 +1,12 @@
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
+import math
+import re
+
+
+V = {1: 1.0, 2: 1.00, 3: 1.00, 4: 1.00, 5: 1.00, 6: 1.00, 7: 1.00, 8: 1.00, 9: 1.00, 10: 1.00, 11: 1.00, 12: 0.00, 13: 0.00, 14: 0.00}
+theta = {1: 0.0, 2: 0.00, 3: 0.00, 4: 0.00, 5: 0.00, 6: 0.00, 7: 0.00, 8: 0.00, 9: 0.00, 10: 0.00, 11: 0.00, 12: 0.00, 13: 0.00, 14: 0.00}
 
 # Criar conexão com o banco
 def conectar_banco():
@@ -80,6 +86,42 @@ def obter_nome_tap(tap):
 
 
 # -------------------------------
+# Função para substituir valores
+# -------------------------------
+
+
+def substituir_valores(expr: str) -> str:
+    # tap1, tap2, ... -> valores numéricos do dicionário tap_vars
+    expr = re.sub(
+        r'\btap(\d+)\b',
+        lambda m: str(tap_vars.get(f"tap{m.group(1)}", f"tap{m.group(1)}")),
+        expr
+    )
+
+    # theta12 (com subtração em texto): thetaK - thetaM
+    expr = re.sub(
+        r'\btheta(\d+)\b',
+        lambda m: str(theta.get(int(m.group(1)), f"theta{m.group(1)}")),
+        expr
+    )
+
+    # Caso especial que você usa em QGk: thetaK_M  -> (theta[K] - theta[M])
+    expr = re.sub(
+        r'\btheta(\d+)_(\d+)\b',
+        lambda m: f"({theta.get(int(m.group(1)), 0)} - {theta.get(int(m.group(2)), 0)})",
+        expr
+    )
+
+    # V1, V2, ... -> valores numéricos do dicionário V
+    expr = re.sub(
+        r'\bV(\d+)\b',
+        lambda m: str(V.get(int(m.group(1)), f"V{m.group(1)}")),
+        expr
+    )
+
+    return expr
+
+# -------------------------------
 # Construir a Função Objetiva
 # -------------------------------
 print("\nFUNÇÃO OBJETIVA:\n")
@@ -98,15 +140,23 @@ for _, row in dadoslinha.iterrows():
     tap_inv_str = f"(1 / {tap_nome})" if tap_nome else "1"
 
     termo = (
-        f"{gkm:.6f} * {tap_inv_quad_str} * V{int(origem)}**2 + V{int(destino)}**2 "
-        f"- 2 * {tap_inv_str} * V{int(origem)} * V{int(destino)} * cos(theta{int(origem)} - theta{int(destino)})"
+        f"{gkm:.6f} * ({tap_inv_quad_str} * V{int(origem)}**2 + V{int(destino)}**2 "
+        f"- 2 * {tap_inv_str} * V{int(origem)} * V{int(destino)} * math.cos(theta{int(origem)} - theta{int(destino)}))"
     )
 
-    equacao_objetiva.append(termo.replace("* 1 ", ""))  # Remove multiplicações desnecessárias
+    termo = termo.replace("(1 * ", "(").replace("* 1 *", "* ").replace("* 1 ", " ")
+    termo = substituir_valores(termo)
+    equacao_objetiva.append(termo)
 
-funcao_objetiva = " +\n".join(equacao_objetiva)
+funcao_objetiva = " + ".join(equacao_objetiva)
 print(funcao_objetiva)
 print()
+
+
+# Agora, calcula o valor numérico
+valor_objetivo = eval(funcao_objetiva, {"math": math})
+print("\nValor da Função Objetivo Calculado:", valor_objetivo)
+
 
 # ----------------------------------------------
 # Função para puxar parâmetros do banco de dados
@@ -131,13 +181,13 @@ def calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial"):
         return (
             f"({tap_inv_quad_str}{gkm:.6f}) * (V{int(origem)}**2) - "
             f"{tap_inv_str}V{int(origem)} * V{int(destino)} * "
-            f"({gkm:.6f} * cos(theta{int(origem)} - theta{int(destino)}) + ({bkm:.6f}) * sin(theta{int(origem)} - theta{int(destino)}))"
+            f"({gkm:.6f} * math.cos(theta{int(origem)} - theta{int(destino)}) + ({bkm:.6f}) * math.sin(theta{int(origem)} - theta{int(destino)}))"
         )
     elif tipo == "final":
         return (
             f"{gkm:.6f} * (V{int(destino)}**2) - "
             f"{tap_inv_str}V{int(destino)} * V{int(origem)} * "
-            f"({gkm:.6f} * cos(theta{int(destino)} - theta{int(origem)}) + ({bkm:.6f}) * sin(theta{int(destino)} - theta{int(origem)}))"
+            f"({gkm:.6f} * math.cos(theta{int(destino)} - theta{int(origem)}) + ({bkm:.6f}) * math.sin(theta{int(destino)} - theta{int(origem)}))"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
 
 
@@ -153,6 +203,9 @@ for _, row in dadoslinha.iterrows():
     origem, destino, gkm, bkm, tap, bsh = extrair_parametros_linha(row)
     pkm_inicial = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="inicial")
     pkm_final = calcular_fluxo_p_ativo(origem, destino, gkm, bkm, tap, tipo="final")
+
+    pkm_inicial_val = substituir_valores(pkm_inicial)
+    pkm_final_val   = substituir_valores(pkm_final)
 
     #print(f"Linha {origem} → {destino}:")
     #print(f"  Nó Inicial: {pkm_inicial}")
@@ -192,9 +245,11 @@ for k in sorted(barras_restricao1):
     restricoes.append((k, restricao_k))
 
 for k, expressao in restricoes:
-    print(f"Restrição para barra {k}:")
-    print(expressao)
+    expressao_val = substituir_valores(expressao)
+    print(f"Restrição para barra {k} (valores substituídos):")
+    print(expressao_val)
     print()
+
 
 # -------------------------------
 # Função para calcular QKM
@@ -212,14 +267,14 @@ def calcular_fluxo_q_reativo(origem, destino, gkm, bkm, bsh, tap, tipo="inicial"
         return (
             f"-(({bkm:.6f} * {tap_inv_quad_str}) + {bsh:.6f}) * (V{int(origem)}**2) + "
             f"{tap_inv_str}V{int(origem)} * V{int(destino)} * "
-            f"({bkm:.6f} * cos(theta{int(origem)} - theta{int(destino)}) - {gkm:.6f} * sin(theta{int(origem)} - theta{int(destino)}))"
+            f"({bkm:.6f} * math.cos(theta{int(origem)} - theta{int(destino)}) - {gkm:.6f} * math.sin(theta{int(origem)} - theta{int(destino)}))"
         )
     
     elif tipo == "final":
         return (
             f"-({bkm:.6f} + {bsh:.6f}) * (V{int(destino)}**2) + "
             f"{tap_inv_str}V{int(destino)} * V{int(origem)} * "
-            f"({bkm:.6f} * cos(theta{int(destino)} - theta{int(origem)}) - {gkm:.6f} * sin(theta{int(destino)} - theta{int(origem)}))"
+            f"({bkm:.6f} * math.cos(theta{int(destino)} - theta{int(origem)}) - {gkm:.6f} * math.sin(theta{int(destino)} - theta{int(origem)}))"
         ).replace("*  *", "*").replace("  ", " ").replace("(1 / )", "")
 
 
@@ -253,10 +308,10 @@ def calcular_qgk(k, dadosbarra, dadoslinha):
 
         # Cálculo de Q_km(V, tap, θ)
         if k == origem:
-            Qkm = f"-({bkm:.6f} * {tap_inv_str} + {bsh:.6f}) * V{origem}**2 + {tap_inv_str}V{origem} * V{destino} * ({bkm:.6f} * cos(theta{origem}_{destino}) - {gkm:.6f} * sin(theta{origem}_{destino}))"
+            Qkm = f"-({bkm:.6f} * {tap_inv_str} + {bsh:.6f}) * V{origem}**2 + {tap_inv_str}V{origem} * V{destino} * ({bkm:.6f} * math.cos(theta{origem}_{destino}) - {gkm:.6f} * math.sin(theta{origem}_{destino}))"
             termos_fluxo_q.append(f"({Qkm})")
         elif k == destino:
-            Qkm = f"-({bkm:.6f} + {bsh:.6f}) * V{destino}**2 + {tap_inv_str}V{destino} * V{origem} * ({bkm:.6f} * cos(theta{destino}_{origem}) - {gkm:.6f} * sin(theta{destino}_{origem}))"
+            Qkm = f"-({bkm:.6f} + {bsh:.6f}) * V{destino}**2 + {tap_inv_str}V{destino} * V{origem} * ({bkm:.6f} * math.cos(theta{destino}_{origem}) - {gkm:.6f} * math.sin(theta{destino}_{origem}))"
             termos_fluxo_q.append(f"({Qkm})")
 
     # Retorna a equação final de QGk
@@ -295,9 +350,11 @@ for k in sorted(barras_carga):  # Itera sobre as barras de carga
 
 # Exibe as restrições corrigidas
 for k, expressao in restricoes_q:
-    print(f"Restrição de Reativa para barra {k}:")
-    print(expressao)
+    expressao_val = substituir_valores(expressao)
+    print(f"Restrição de Reativa para barra {k} (valores substituídos):")
+    print(expressao_val)
     print()
+
 
 
 print("-------------------------------------------")
@@ -346,9 +403,11 @@ for k in sorted(barras_G):  # Itera sobre as barras do tipo 1 e 2
 
 # Exibe as restrições formatadas corretamente
 for k, expressao in restricoes_qg:
-    print(f"Restrição para barra {k}:")
-    print(expressao)
+    expressao_val = substituir_valores(expressao)
+    print(f"Restrição para barra {k} (valores substituídos):")
+    print(expressao_val)
     print()
+
 
     
 
@@ -385,7 +444,8 @@ def montar_restricao_vmin_vmax(dadosbarra, vmin, vmax):
         print("------------------------------------------\n")
 
         for barra in dadosbarra.index:
-            print(f"Barra {barra}: {vmin} <= V{barra} <= {vmax}")
+            v_real = V[barra]  # pega o valor real
+            print(f"Barra {barra}: {vmin} <= {v_real} <= {vmax}")
     else:
         print("Erro: Nenhum dado encontrado para dadosbarra.")
 
